@@ -99,18 +99,26 @@ class GuidancePolicy(nn.Module):
         
         # Encode state
         t_emb = self.get_timestep_embedding(timesteps)     # (B, 64)
+        latents = latents / (latents.abs().mean(dim=(1,2,3), keepdim=True) + 1e-6)
         l_emb = self.latent_pool(latents)                   # (B, 64)
         state = torch.cat([t_emb, l_emb], dim=-1)           # (B, 128)
         
         # Forward through backbone
         h = self.backbone(state)                             # (B, hidden_dim)
+        h = torch.nan_to_num(h, nan=0.0, posinf=1e4, neginf=-1e4)
         
         # Get distribution parameters
-        mean = self.mean_head(h)                             # (B, 2)
+        mean = self.mean_head(h)
+        mean = torch.clamp(mean, -10.0, 10.0)        
         log_std = self.log_std_head(h).clamp(-5, 2)          # (B, 2)
-        std = log_std.exp()
+        std = torch.exp(log_std)
+        std = torch.clamp(std, min=1e-3, max=2.0)   
         
         # Sample actions (Δγ, Δη)
+        if torch.isnan(mean).any() or torch.isnan(std).any():
+            print("⚠️ NaN detected in policy, resetting")
+            mean = torch.zeros_like(mean)
+            std = torch.ones_like(std) * 0.1
         dist = Normal(mean, std)
         raw_action = dist.rsample()                          # (B, 2) - reparameterized
         
