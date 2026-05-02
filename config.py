@@ -83,7 +83,7 @@ class Config:
     max_train_steps: int = 500
     gradient_accumulation_steps: int = 4
     clip_norm: float = 0.1
-    gen_batch_size: int = 2              # images per generation (12GB VRAM)
+    gen_batch_size: int = 1              # images per generation (12GB VRAM)
     policy_batch_size: int = 2           # batch for policy update
     buffer_size: int = 50                # replay buffer size
     
@@ -139,12 +139,12 @@ class Config:
     ])
     
     # === Logging ===
-    log_dir: str = "./logs"
-    save_dir: str = "./checkpoints"
+    log_dir: str = "/kaggle/working/logs"
+    save_dir: str = "/kaggle/working/checkpoints"
+    sample_dir: str = "/kaggle/working/samples"
     log_every: int = 10
-    save_every: int = 100
+    save_every: int = 50
     eval_every: int = 50
-    sample_dir: str = "./samples"
     
     # === Seed ===
     seed: int = 42
