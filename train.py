@@ -328,6 +328,16 @@ def evaluate(pipeline, policy, reward_model, prompts, config, step, writer, samp
         save_path = Path(sample_dir) / f"step_{step}.png"
         save_image(grid, save_path)
         print(f"  Saved samples to {save_path}")
+        try:
+            sample_dir_contents = sorted(os.listdir(sample_dir))
+            if sample_dir_contents:
+                preview = ", ".join(sample_dir_contents[:10])
+                suffix = " ..." if len(sample_dir_contents) > 10 else ""
+                print(f"  Sample dir ({sample_dir}) contains: {preview}{suffix}")
+            else:
+                print(f"  Sample dir ({sample_dir}) is empty")
+        except FileNotFoundError:
+            print(f"  Sample dir ({sample_dir}) not found")
     
     # Log metrics
     mean_clip = np.mean(all_clip)
@@ -517,6 +527,28 @@ def main():
                 if config.use_lora:
                     pipeline.unet.save_pretrained(save_path / "lora")
                 print(f"  New best CLIP: {best_clip:.4f}")
+                print(f"  Saved best checkpoint to {save_path}")
+                print(f"  Logs directory: {config.log_dir}")
+                try:
+                    ckpt_contents = sorted(os.listdir(save_path))
+                    if ckpt_contents:
+                        preview = ", ".join(ckpt_contents[:10])
+                        suffix = " ..." if len(ckpt_contents) > 10 else ""
+                        print(f"  Checkpoint dir contains: {preview}{suffix}")
+                    else:
+                        print("  Checkpoint dir is empty")
+                except FileNotFoundError:
+                    print("  Checkpoint dir not found")
+                try:
+                    log_contents = sorted(os.listdir(config.log_dir))
+                    if log_contents:
+                        preview = ", ".join(log_contents[:10])
+                        suffix = " ..." if len(log_contents) > 10 else ""
+                        print(f"  Log dir contains: {preview}{suffix}")
+                    else:
+                        print("  Log dir is empty")
+                except FileNotFoundError:
+                    print("  Log dir not found")
         
         # === Periodic save ===
         if step % config.save_every == 0:
@@ -526,6 +558,17 @@ def main():
                 torch.save(policy.state_dict(), save_path / "policy.pt")
             if config.use_lora:
                 pipeline.unet.save_pretrained(save_path / "lora")
+            print(f"  Saved checkpoint to {save_path}")
+            try:
+                ckpt_contents = sorted(os.listdir(save_path))
+                if ckpt_contents:
+                    preview = ", ".join(ckpt_contents[:10])
+                    suffix = " ..." if len(ckpt_contents) > 10 else ""
+                    print(f"  Checkpoint dir contains: {preview}{suffix}")
+                else:
+                    print("  Checkpoint dir is empty")
+            except FileNotFoundError:
+                print("  Checkpoint dir not found")
     
     # Final save
     print("\nTraining complete!")
