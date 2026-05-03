@@ -75,14 +75,14 @@ class Config:
     sparse_gate_rlg: bool = True
     
     # === RL Training (DPOK [2]) ===
-    learning_rate: float = 1e-4
+    learning_rate: float = 5e-5
     lora_lr: float = 1e-5
     lora_train_eta: float = 1.0          # stochastic DDIM eta used for LoRA-only training
-    reward_weight: float = 10.0
+    reward_weight: float = 1.0
     kl_weight: float = 0.01
     max_train_steps: int = 500
     gradient_accumulation_steps: int = 4
-    clip_norm: float = 0.1
+    clip_norm: float = 0.05
     gen_batch_size: int = 1              # images per generation (12GB VRAM)
     policy_batch_size: int = 2           # batch for policy update
     buffer_size: int = 50                # replay buffer size

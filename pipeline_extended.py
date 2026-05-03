@@ -282,6 +282,10 @@ class RLGuidedPipeline:
             log_prob: log probability of this transition
         """
         t = timestep
+        # Keep all math in float32 for numerical stability, especially with
+        # fp16 pipelines where log/exp can underflow.
+        latents_f = latents.float()
+        noise_pred_f = noise_pred.float()
         # Get previous timestep
         num_steps = self.scheduler.config.num_train_timesteps
         step_ratio = num_steps // self.scheduler.num_inference_steps
@@ -291,11 +295,12 @@ class RLGuidedPipeline:
         alpha_prod_t_prev = self.scheduler.alphas_cumprod[max(prev_t.cpu().long().item(), 0)] \
             if prev_t >= 0 else torch.tensor(1.0)
         
-        alpha_prod_t = torch.as_tensor(alpha_prod_t, device=self.device, dtype=latents.dtype)
-        alpha_prod_t_prev = torch.as_tensor(alpha_prod_t_prev, device=self.device, dtype=latents.dtype)
+        alpha_prod_t = torch.as_tensor(alpha_prod_t, device=self.device, dtype=latents_f.dtype)
+        alpha_prod_t_prev = torch.as_tensor(alpha_prod_t_prev, device=self.device, dtype=latents_f.dtype)
         
         # Predicted x0
-        pred_x0 = (latents - (1 - alpha_prod_t).sqrt() * noise_pred) / alpha_prod_t.sqrt()
+        pred_x0 = (latents_f - (1 - alpha_prod_t).sqrt() * noise_pred_f) / alpha_prod_t.sqrt()
+        pred_x0 = torch.nan_to_num(pred_x0, nan=0.0, posinf=1e4, neginf=-1e4)
         
         # Variance for stochastic DDIM
         sigma_t = eta * ((1 - alpha_prod_t_prev) / (1 - alpha_prod_t)).sqrt() * \
@@ -305,13 +310,14 @@ class RLGuidedPipeline:
         pred_dir_coeff = (1 - alpha_prod_t_prev - sigma_t**2).clamp(min=0).sqrt()
         
         # Mean of the transition
-        mean = alpha_prod_t_prev.sqrt() * pred_x0 + pred_dir_coeff * noise_pred
+        mean = alpha_prod_t_prev.sqrt() * pred_x0 + pred_dir_coeff * noise_pred_f
+        mean = torch.nan_to_num(mean, nan=0.0, posinf=1e4, neginf=-1e4)
         
         if eta > 0:
             noise = torch.randn(
-                latents.shape,
-                device=latents.device,
-                dtype=latents.dtype,
+                latents_f.shape,
+                device=latents_f.device,
+                dtype=latents_f.dtype,
                 generator=generator,
             )
             next_latents = mean + sigma_t * noise
@@ -331,8 +337,10 @@ class RLGuidedPipeline:
         else:
             next_latents = mean
             # Deterministic step: log_prob is 0 (delta distribution)
-            log_prob = torch.zeros(latents.shape[0], device=self.device)
-        
+            log_prob = torch.zeros(latents_f.shape[0], device=self.device, dtype=latents_f.dtype)
+
+        # Cast back to the original dtype for downstream pipeline use.
+        next_latents = next_latents.to(dtype=latents.dtype)
         return next_latents, log_prob
     
     @torch.no_grad()

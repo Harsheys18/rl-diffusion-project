@@ -109,9 +109,10 @@ class GuidancePolicy(nn.Module):
         
         # Get distribution parameters
         mean = self.mean_head(h)
-        mean = torch.clamp(mean, -10.0, 10.0)        
+        mean = torch.tanh(mean) * 5.0      
         log_std = self.log_std_head(h).clamp(-5, 2)          # (B, 2)
         std = torch.exp(log_std)
+        std = torch.clamp(std, 1e-3, 2.0)   
         std = torch.clamp(std, min=1e-3, max=2.0)   
         
         # Sample actions (Δγ, Δη)
