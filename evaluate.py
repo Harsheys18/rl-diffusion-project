@@ -447,6 +447,65 @@ def save_plotting_artifacts(results, config, output_dir):
     print(f"  Saved arrays to {output_dir}/plotting_arrays.npz")
 
 
+def score_prompt_set(pipeline, policy, reward_model, prompts, config, output_dir,
+                     split_name, num_seeds=1):
+    """Generate one image per prompt/seed and compute full reward breakdown."""
+    results = []
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for prompt_idx, prompt in enumerate(tqdm(prompts, desc=f"Scoring {split_name}")):
+        for seed_idx in range(num_seeds):
+            seed = config.seed + seed_idx
+            use_policy = policy if config.use_policy_network else None
+            use_reward = reward_model if config.use_dynamic_cfg else None
+
+            with torch.no_grad():
+                result = pipeline.generate_with_trajectory(
+                    prompts=[prompt],
+                    policy=use_policy,
+                    reward_model=use_reward,
+                    seed=seed,
+                )
+
+            rewards = reward_model.compute_terminal_reward(result["images"], [prompt])
+            filename = f"{split_name}_prompt_{prompt_idx}_seed_{seed}.png"
+            save_image(
+                result["images"],
+                output_dir / filename,
+                nrow=1,
+                normalize=True,
+                value_range=(-1, 1),
+            )
+
+            results.append({
+                "split": split_name,
+                "prompt_idx": prompt_idx,
+                "prompt": prompt,
+                "seed_idx": seed_idx,
+                "seed": seed,
+                "filename": filename,
+                "clip_score": rewards["clip"].item(),
+                "lpips_score": rewards["lpips"].item(),
+                "diversity_score": rewards["diversity"].item(),
+                "total_score": rewards["total"].item(),
+            })
+
+    return results
+
+
+def print_score_results(results, header):
+    print("\n--- " + header + " Evaluation Summary ---")
+    for res in results:
+        print(f"Prompt: {res['prompt']}")
+        print(f"  Generated Image: {res['filename']}")
+        print(f"  CLIP Score: {res['clip_score']:.4f}")
+        print(f"  LPIPS Score: {res['lpips_score']:.4f}")
+        print(f"  Diversity Score: {res['diversity_score']:.4f}")
+        print(f"  Total Modified Score: {res['total_score']:.4f}")
+        print("-" * 30)
+
+
 def run_ablation(pipeline, policy, reward_model, prompts, config, output_dir):
     """Run ablation study: disable each method and measure impact."""
     print("\n=== Running Ablation Study ===")
@@ -547,6 +606,10 @@ def main():
                        help="Let RLG blending run on every step even for sparse RL")
     parser.add_argument("--allow-untrained", action="store_true",
                        help="Allow evaluation with missing checkpoint pieces")
+    parser.add_argument("--score-train-test", action="store_true",
+                       help="Score train and eval prompts with full reward breakdown")
+    parser.add_argument("--skip-comparisons", action="store_true",
+                       help="Skip baseline/dense/sparse comparison plots and tables")
     args = parser.parse_args()
     if args.num_seeds < 1:
         parser.error("--num-seeds must be at least 1")
@@ -590,42 +653,60 @@ def main():
     if policy is not None:
         policy.eval()
     
-    # All prompts for evaluation
+    # Shared prompt bundle for comparisons/ablation
     all_prompts = config.eval_prompts + config.train_prompts[:5]
-    
-    # Generate comparisons
-    results = generate_comparison(
-        pipeline, policy, reward_model, all_prompts, config, output_dir,
-        num_seeds=args.num_seeds
-    )
-    save_results_json(results, output_dir)
-    save_plotting_artifacts(results, config, output_dir)
-    
-    # Plot schedule
-    plot_schedules(results, output_dir)
-    
-    # Plot CLIP comparison
-    plot_clip_comparison(results, output_dir)
-    
-    # Summary table
-    print("\n" + "=" * 60)
-    print("RESULTS SUMMARY")
-    print("=" * 60)
-    print(f"{'Prompt':<34} {'Baseline':>9} {'Dense RL':>9} {'Sparse':>9} {'S-B':>8} {'S-D':>8}")
-    print("-" * 86)
-    for r in results:
-        sparse_vs_base = r["sparse_rl_clip"] - r["baseline_clip"]
-        sparse_vs_dense = r["sparse_rl_clip"] - r["dense_rl_clip"]
-        print(f"{r['prompt'][:32]:<34} {r['baseline_clip']:>9.4f} "
-              f"{r['dense_rl_clip']:>9.4f} {r['sparse_rl_clip']:>9.4f} "
-              f"{sparse_vs_base:>+8.4f} {sparse_vs_dense:>+8.4f}")
-    
-    mean_b = np.mean([r["baseline_clip"] for r in results])
-    mean_d = np.mean([r["dense_rl_clip"] for r in results])
-    mean_s = np.mean([r["sparse_rl_clip"] for r in results])
-    print("-" * 86)
-    print(f"{'MEAN':<34} {mean_b:>9.4f} {mean_d:>9.4f} {mean_s:>9.4f} "
-          f"{mean_s-mean_b:>+8.4f} {mean_s-mean_d:>+8.4f}")
+
+    if args.score_train_test:
+        train_scores = score_prompt_set(
+            pipeline, policy, reward_model, config.train_prompts,
+            config, output_dir / "scored", "train", num_seeds=args.num_seeds,
+        )
+        eval_scores = score_prompt_set(
+            pipeline, policy, reward_model, config.eval_prompts,
+            config, output_dir / "scored", "eval", num_seeds=args.num_seeds,
+        )
+        print_score_results(train_scores, "Train")
+        print_score_results(eval_scores, "Eval")
+
+        with open(output_dir / "train_prompt_scores.json", "w") as f:
+            json.dump(train_scores, f, indent=2)
+        with open(output_dir / "eval_prompt_scores.json", "w") as f:
+            json.dump(eval_scores, f, indent=2)
+
+    if not args.skip_comparisons:
+        # Generate comparisons
+        results = generate_comparison(
+            pipeline, policy, reward_model, all_prompts, config, output_dir,
+            num_seeds=args.num_seeds
+        )
+        save_results_json(results, output_dir)
+        save_plotting_artifacts(results, config, output_dir)
+
+        # Plot schedule
+        plot_schedules(results, output_dir)
+
+        # Plot CLIP comparison
+        plot_clip_comparison(results, output_dir)
+
+        # Summary table
+        print("\n" + "=" * 60)
+        print("RESULTS SUMMARY")
+        print("=" * 60)
+        print(f"{'Prompt':<34} {'Baseline':>9} {'Dense RL':>9} {'Sparse':>9} {'S-B':>8} {'S-D':>8}")
+        print("-" * 86)
+        for r in results:
+            sparse_vs_base = r["sparse_rl_clip"] - r["baseline_clip"]
+            sparse_vs_dense = r["sparse_rl_clip"] - r["dense_rl_clip"]
+            print(f"{r['prompt'][:32]:<34} {r['baseline_clip']:>9.4f} "
+                  f"{r['dense_rl_clip']:>9.4f} {r['sparse_rl_clip']:>9.4f} "
+                  f"{sparse_vs_base:>+8.4f} {sparse_vs_dense:>+8.4f}")
+
+        mean_b = np.mean([r["baseline_clip"] for r in results])
+        mean_d = np.mean([r["dense_rl_clip"] for r in results])
+        mean_s = np.mean([r["sparse_rl_clip"] for r in results])
+        print("-" * 86)
+        print(f"{'MEAN':<34} {mean_b:>9.4f} {mean_d:>9.4f} {mean_s:>9.4f} "
+              f"{mean_s-mean_b:>+8.4f} {mean_s-mean_d:>+8.4f}")
     
     # Ablation
     if args.ablation:
